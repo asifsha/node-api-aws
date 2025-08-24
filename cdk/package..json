@@ -1,0 +1,21 @@
+{
+  "name": "node-api-infra",
+  "version": "0.1.0",
+  "bin": {
+    "node-api-infra": "bin/infra.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "cdk": "cdk",
+    "deploy": "npm run build && cdk deploy",
+    "destroy": "npm run build && cdk destroy",
+    "synth": "npm run build && cdk synth"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.150.0",
+    "constructs": "^10.3.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}

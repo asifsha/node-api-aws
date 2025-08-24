@@ -1,0 +1,89 @@
+name: CI/CD 2048
+
+on:
+  push:
+    branches: [ "main" ]
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPO: game-2048
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write    # for OIDC
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # (Optional) Lint/Test your 2048 code here
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::<ACCOUNT_ID>:role/<YOUR_GITHUB_OIDC_ROLE>
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Ensure ECR repo exists
+        run: |
+          aws ecr describe-repositories --repository-names "$ECR_REPO" \
+          || aws ecr create-repository --repository-name "$ECR_REPO"
+
+      - name: Log in to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & push image
+        working-directory: app
+        run: |
+          IMAGE_URI="${{ steps.ecr-login.outputs.registry }}/${ECR_REPO}:${GITHUB_SHA}"
+          docker build -t "$IMAGE_URI" .
+          docker push "$IMAGE_URI"
+          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+
+      # Update ECS Task Definition to new image
+      - name: Get ECS Outputs
+        id: cdk-outputs
+        run: |
+          # Replace with your stack name
+          STACK_NAME=Game2048Stack
+          ALB_URL=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='LoadBalancerUrl'].OutputValue" --output text)
+          CLUSTER=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='EcsClusterName'].OutputValue" --output text)
+          SERVICE=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='EcsServiceName'].OutputValue" --output text)
+          FAMILY=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='TaskDefinitionFamily'].OutputValue" --output text)
+          echo "ALB_URL=$ALB_URL" >> $GITHUB_ENV
+          echo "CLUSTER=$CLUSTER" >> $GITHUB_ENV
+          echo "SERVICE=$SERVICE" >> $GITHUB_ENV
+          echo "FAMILY=$FAMILY" >> $GITHUB_ENV
+
+      - name: Render new task definition with image
+        id: taskdef
+        run: |
+          LATEST_TD=$(aws ecs describe-task-definition --task-definition "$FAMILY" --query taskDefinition)
+          echo "$LATEST_TD" > td.json
+
+          # Replace container image (assumes first container in definition)
+          NEW_TD=$(jq --arg IMG "$IMAGE_URI" '.containerDefinitions[0].image=$IMG' td.json)
+          echo "$NEW_TD" > td-new.json
+
+          # Register & capture new revision ARN
+          NEW_ARN=$(aws ecs register-task-definition --cli-input-json file://td-new.json --query taskDefinition.taskDefinitionArn --output text)
+          echo "NEW_TD_ARN=$NEW_ARN" >> $GITHUB_ENV
+
+      - name: Deploy new task definition to service
+        run: |
+          aws ecs update-service \
+            --cluster "$CLUSTER" \
+            --service "$SERVICE" \
+            --task-definition "$NEW_TD_ARN" \
+            --force-new-deployment
+
+      - name: Output URL
+        run: echo "Game URL: $ALB_URL"
