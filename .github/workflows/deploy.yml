@@ -53,7 +53,7 @@ jobs:
               requiresCompatibilities: ["FARGATE"],
               cpu: "256",
               memory: "512",
-              executionRoleArn: "arn:aws:iam::<ACCOUNT_ID>:role/ecsTaskExecutionRole",
+              executionRoleArn: "arn:aws:iam::412381746256:role/ecsTaskExecutionRole",
               containerDefinitions: [
                 {
                   name: "node-api",
